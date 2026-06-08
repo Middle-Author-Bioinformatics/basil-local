@@ -34,9 +34,10 @@ PIPELINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Local scratch space for in-flight jobs (output dirs, logs, etc.).
 BASIL_WORK_ROOT="/home/ark/MAB/basil_work"
 
-# Absolute paths into the `basil` micromamba env. Edit BASIL_ENV_BIN if your
-# env lives elsewhere (find it with: ls ~/micromamba/envs/).
-BASIL_ENV_BIN="/home/ark/micromamba/envs/basil/bin"
+# Absolute paths into the `basil` conda env. Edit BASIL_ENV_BIN if your env
+# lives elsewhere. Find it with:
+#   ls -d /home/ark/miniconda3/envs/basil /home/ark/micromamba/envs/basil 2>/dev/null
+BASIL_ENV_BIN="/home/ark/miniconda3/envs/basil/bin"
 PYTHON="$BASIL_ENV_BIN/python"
 RSCRIPT="$BASIL_ENV_BIN/Rscript"
 AWS="$BASIL_ENV_BIN/aws"
