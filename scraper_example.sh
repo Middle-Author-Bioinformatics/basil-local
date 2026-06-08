@@ -22,7 +22,7 @@
 #   * BASIL-public is at the path in BASIL_PUBLIC_DIR below, with the
 #     env-driven myConstant.py already copied into main_scripts/.
 
-set -euo pipefail
+#set -euo pipefail
 
 # ─── Hard-coded configuration ────────────────────────────────────────────────
 BASIL_INPUT_BUCKET="midauthorbio-basil-input"
@@ -46,20 +46,20 @@ mkdir -p "$BASIL_WORK_ROOT"
 DONE_DIR="$BASIL_WORK_ROOT/.done"
 mkdir -p "$DONE_DIR"
 
-# Activate the conda env so `Rscript`, `python`, and BASIL's deps are on PATH.
-# We use the conda shell hook so this works from cron too (where ~/.bashrc
-# isn't sourced).
-if command -v conda >/dev/null 2>&1; then
-    eval "$(conda shell.bash hook)"
-    conda activate "$CONDA_ENV" 2>/dev/null || \
-        echo "[scraper] WARNING: could not conda-activate $CONDA_ENV; proceeding with current PATH"
-elif command -v mamba >/dev/null 2>&1; then
-    eval "$(mamba shell hook --shell bash)"
-    mamba activate "$CONDA_ENV" 2>/dev/null || \
-        echo "[scraper] WARNING: could not mamba-activate $CONDA_ENV; proceeding with current PATH"
-else
-    echo "[scraper] WARNING: neither conda nor mamba on PATH; assuming env is already active"
-fi
+## Activate the conda env so `Rscript`, `python`, and BASIL's deps are on PATH.
+## We use the conda shell hook so this works from cron too (where ~/.bashrc
+## isn't sourced).
+#if command -v conda >/dev/null 2>&1; then
+#    eval "$(conda shell.bash hook)"
+#    conda activate "$CONDA_ENV" 2>/dev/null || \
+#        echo "[scraper] WARNING: could not conda-activate $CONDA_ENV; proceeding with current PATH"
+#elif command -v mamba >/dev/null 2>&1; then
+#    eval "$(mamba shell hook --shell bash)"
+#    mamba activate "$CONDA_ENV" 2>/dev/null || \
+#        echo "[scraper] WARNING: could not mamba-activate $CONDA_ENV; proceeding with current PATH"
+#else
+#    echo "[scraper] WARNING: neither conda nor mamba on PATH; assuming env is already active"
+#fi
 
 export AWS_DEFAULT_REGION="$AWS_REGION"
 
