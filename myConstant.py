@@ -59,3 +59,11 @@ D = DILUTION
 N = POPULATION_SIZE
 n_processes = NUMBER_OF_PROCESSES
 n_lineage_mle = NUMBER_LINEAGE_MLE
+
+# ------ Use only for reading another posterior file as initialization of lineage (default=None)----#
+INITIAL_LINEAGES_FROM_FILE = None
+
+# ------ Model Setting in BASIL algorithm (do not change) -----------------#
+MODEL_NAME = {'N': 'NModel', 'SN': 'SModel_N', 'SS': 'SModel_S'}
+LINEAGE_TAG = {'UNK': 'Unknown', 'NEU': 'Neutral', 'ADP': 'Adaptive'}
+
