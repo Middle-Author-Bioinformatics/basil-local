@@ -4,7 +4,7 @@
 # Polls the BASIL S3 input bucket for new slug prefixes, runs the BASIL
 # pipeline on each, and uploads results to the S3 results bucket.
 #
-# Hard-coded for Middle Author Bioinformatics' tower (`BIOD2014` / Ark's box).
+# Hard-coded for Middle Author Bioinformatics' tower (TheBelly / Ark's box).
 # Just run it:
 #
 #     bash /home/ark/MAB/bin/basil_webapp/pipeline/scraper_example.sh
@@ -12,17 +12,14 @@
 # Or drop it into cron (every 5 minutes):
 #
 #     */5 * * * *  /usr/bin/bash /home/ark/MAB/bin/basil_webapp/pipeline/scraper_example.sh \
-#                     >> /var/log/basil-scraper.log 2>&1
+#                     >> /home/ark/MAB/basil_work/scraper.log 2>&1
 #
-# Prerequisites on the tower:
-#   * `aws` CLI installed and `aws s3 ls s3://midauthorbio-basil-input/` works
-#     under the user that runs this script (configure via `aws configure`).
-#   * The `basil-webapp` mamba env is activated (or `BASIL_PYTHON` below is set
-#     to the env's python). The script tries to activate it itself.
-#   * BASIL-public is at the path in BASIL_PUBLIC_DIR below, with the
-#     env-driven myConstant.py already copied into main_scripts/.
+# All paths to the basil env's binaries are hard-coded below — we do NOT use
+# `conda activate` because Ark's shell PATH is poisoned (btex-hmm wins
+# regardless of which env you "activate"). Bypassing activation is the only
+# reliable way.
 
-#set -euo pipefail
+set -euo pipefail
 
 # ─── Hard-coded configuration ────────────────────────────────────────────────
 BASIL_INPUT_BUCKET="midauthorbio-basil-input"
@@ -37,48 +34,60 @@ PIPELINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Local scratch space for in-flight jobs (output dirs, logs, etc.).
 BASIL_WORK_ROOT="/home/ark/MAB/basil_work"
 
-# Conda env name. The script will try to activate it before running BASIL.
-# This env has the BASIL deps (Python 3.9, pystan, R packages, awscli, etc.).
-CONDA_ENV="py_3_9"
+# Absolute paths into the `basil` micromamba env. Edit BASIL_ENV_BIN if your
+# env lives elsewhere (find it with: ls ~/micromamba/envs/).
+BASIL_ENV_BIN="/home/ark/micromamba/envs/basil/bin"
+PYTHON="$BASIL_ENV_BIN/python"
+RSCRIPT="$BASIL_ENV_BIN/Rscript"
+AWS="$BASIL_ENV_BIN/aws"
 # ─────────────────────────────────────────────────────────────────────────────
 
 mkdir -p "$BASIL_WORK_ROOT"
 DONE_DIR="$BASIL_WORK_ROOT/.done"
 mkdir -p "$DONE_DIR"
 
-## Activate the conda env so `Rscript`, `python`, and BASIL's deps are on PATH.
-## We use the conda shell hook so this works from cron too (where ~/.bashrc
-## isn't sourced).
-#if command -v conda >/dev/null 2>&1; then
-#    eval "$(conda shell.bash hook)"
-#    conda activate "$CONDA_ENV" 2>/dev/null || \
-#        echo "[scraper] WARNING: could not conda-activate $CONDA_ENV; proceeding with current PATH"
-#elif command -v mamba >/dev/null 2>&1; then
-#    eval "$(mamba shell hook --shell bash)"
-#    mamba activate "$CONDA_ENV" 2>/dev/null || \
-#        echo "[scraper] WARNING: could not mamba-activate $CONDA_ENV; proceeding with current PATH"
-#else
-#    echo "[scraper] WARNING: neither conda nor mamba on PATH; assuming env is already active"
-#fi
-
+# Put the basil env's bin/ first on PATH so any subprocess (bar2basil.R
+# calling system(), run_pipeline.py invoking Rscript, etc.) picks up the
+# right tools.
+export PATH="$BASIL_ENV_BIN:$PATH"
 export AWS_DEFAULT_REGION="$AWS_REGION"
+
+for bin in "$PYTHON" "$RSCRIPT" "$AWS"; do
+    if [[ ! -x "$bin" ]]; then
+        echo "[scraper] FATAL: missing or non-executable: $bin" >&2
+        echo "          Edit BASIL_ENV_BIN at the top of this script." >&2
+        exit 2
+    fi
+done
 
 ts() { date -u +%FT%TZ; }
 
+echo "[scraper] $(ts) — aws=$AWS"
+echo "[scraper] $(ts) — python=$PYTHON"
+echo "[scraper] $(ts) — Rscript=$RSCRIPT"
+
 # Look for new slug prefixes by listing the bucket at depth 1.
+# Do NOT swallow stderr — if creds/perms/region are wrong, we want to see it.
+list_out="$("$AWS" s3api list-objects-v2 \
+    --bucket "$BASIL_INPUT_BUCKET" \
+    --delimiter "/" \
+    --query 'CommonPrefixes[].Prefix' \
+    --output text 2>&1)" || {
+    echo "[scraper] FATAL: list-objects-v2 failed:" >&2
+    echo "$list_out" >&2
+    exit 2
+}
+
 mapfile -t slugs < <(
-    aws s3api list-objects-v2 \
-        --bucket "$BASIL_INPUT_BUCKET" \
-        --delimiter "/" \
-        --query 'CommonPrefixes[].Prefix' \
-        --output text 2>/dev/null \
+    printf '%s\n' "$list_out" \
         | tr '\t' '\n' \
         | sed 's:/$::' \
         | sort
 )
 
-if [[ ${#slugs[@]} -eq 0 || -z "${slugs[0]:-}" ]]; then
-    echo "[scraper] $(ts) — no slugs in s3://$BASIL_INPUT_BUCKET/"
+if [[ ${#slugs[@]} -eq 0 || -z "${slugs[0]:-}" || "${slugs[0]}" == "None" ]]; then
+    echo "[scraper] $(ts) — no slug prefixes found under s3://$BASIL_INPUT_BUCKET/"
+    echo "[scraper]    aws returned: ${list_out:-(empty)}"
     exit 0
 fi
 
@@ -88,9 +97,9 @@ for slug in "${slugs[@]}"; do
         continue          # already processed in a previous run
     fi
 
-    # Require manifest.txt before we claim the slug, so we don't race against
-    # an in-flight upload from the SPA.
-    if ! aws s3api head-object \
+    # Require manifest.txt before claiming the slug, to avoid racing with an
+    # in-flight upload from the SPA.
+    if ! "$AWS" s3api head-object \
             --bucket "$BASIL_INPUT_BUCKET" \
             --key "$slug/manifest.txt" >/dev/null 2>&1; then
         echo "[scraper] $slug — manifest.txt not yet uploaded, skipping"
@@ -103,10 +112,10 @@ for slug in "${slugs[@]}"; do
     mkdir -p "$raw_counts"
 
     # 1. Download everything for this slug into raw_counts/.
-    aws s3 sync "s3://$BASIL_INPUT_BUCKET/$slug/" "$raw_counts/" --quiet
+    "$AWS" s3 sync "s3://$BASIL_INPUT_BUCKET/$slug/" "$raw_counts/" --quiet
 
     # 2. Convert manifest.txt -> manifest.json for run_pipeline.py.
-    python3 "$PIPELINE_DIR/manifest_txt_to_json.py" \
+    "$PYTHON" "$PIPELINE_DIR/manifest_txt_to_json.py" \
         --in  "$raw_counts/manifest.txt" \
         --out "$workdir/manifest.json"
 
@@ -119,13 +128,13 @@ for slug in "${slugs[@]}"; do
           "basil_inference":{"state":"pending"},
           "visualization":{"state":"pending"}}}
 JSON
-    aws s3 cp "$workdir/status.json" \
+    "$AWS" s3 cp "$workdir/status.json" \
         "s3://$BASIL_RESULTS_BUCKET/$slug/status.json" \
         --content-type application/json --quiet
 
     # 4. Run the pipeline (this writes its own status.json updates).
     pipeline_ok=0
-    if python3 "$PIPELINE_DIR/run_pipeline.py" \
+    if "$PYTHON" "$PIPELINE_DIR/run_pipeline.py" \
             --job-dir "$workdir" \
             --basil-public "$BASIL_PUBLIC_DIR"; then
         echo "[scraper] $slug — pipeline succeeded"
@@ -136,31 +145,25 @@ JSON
 
     # 5. Upload everything the SPA needs to render results.
     if [[ -f "$workdir/status.json" ]]; then
-        aws s3 cp "$workdir/status.json" \
+        "$AWS" s3 cp "$workdir/status.json" \
             "s3://$BASIL_RESULTS_BUCKET/$slug/status.json" \
             --content-type application/json --quiet || true
     fi
     if [[ -d "$workdir/basil_plots" ]]; then
-        aws s3 sync "$workdir/basil_plots/" \
+        "$AWS" s3 sync "$workdir/basil_plots/" \
             "s3://$BASIL_RESULTS_BUCKET/$slug/basil_plots/" --quiet
     fi
     if [[ -d "$workdir/logs" ]]; then
-        aws s3 sync "$workdir/logs/" \
+        "$AWS" s3 sync "$workdir/logs/" \
             "s3://$BASIL_RESULTS_BUCKET/$slug/logs/" \
             --content-type text/plain --quiet
     fi
 
     # 6. Mark this slug done so we don't reprocess it.
-    if [[ $pipeline_ok -eq 1 ]]; then
-        touch "$DONE_DIR/$slug"
-    else
-        # Even on failure, mark done so we don't spin forever. Delete the
-        # marker manually (rm "$DONE_DIR/$slug") to re-attempt the slug.
-        touch "$DONE_DIR/$slug"
-    fi
+    touch "$DONE_DIR/$slug"
 
     # Optional cleanup once you've confirmed the results landed in S3:
-    # aws s3 rm "s3://$BASIL_INPUT_BUCKET/$slug/" --recursive
+    # "$AWS" s3 rm "s3://$BASIL_INPUT_BUCKET/$slug/" --recursive
 done
 
 echo "[scraper] $(ts) — done."
