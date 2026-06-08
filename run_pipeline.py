@@ -215,7 +215,13 @@ def step_basil(job_dir: Path, manifest: dict[str, Any], basil_input_dir: Path,
     output_dir.mkdir(exist_ok=True)
 
     # Mark all known samples as queued so the UI can render rows.
+    # samples_state = status.data["steps"]["basil_inference"]["samples"]
+    status.data.setdefault("steps", {})
+    status.data["steps"].setdefault("basil_inference", {})
+    status.data["steps"]["basil_inference"].setdefault("samples", {})
     samples_state = status.data["steps"]["basil_inference"]["samples"]
+    status.save()
+
     with (basil_input_dir / "input.csv").open() as f:
         reader = csv.DictReader(f)
         for row in reader:
