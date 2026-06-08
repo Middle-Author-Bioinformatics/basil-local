@@ -1,69 +1,83 @@
-# myConstant.py — pipeline-compatible config for BASIL
-#
-# Reads all per-sample parameters from environment variables set by the
-# orchestrator (run_pipeline.py / basil_dispatcher.sh), instead of hard-coding
-# them. This is the same contract used by the original SLURM dispatcher, so
-# BASIL's main_scripts/main.py picks up DATA / CASE / OUT / D / N / THREADS
-# transparently.
-#
-# Required environment variables (set per-sample by the dispatcher):
-#   BASIL_DATA     Full path to the *_basil.txt input file
-#   BASIL_CASE     Sample case name (used for output naming)
-#   BASIL_OUT      Per-sample output directory
-#   BASIL_D        Dilution factor (float)
-#   BASIL_N        Carrying capacity / effective population size (float)
-#
-# Optional:
-#   BASIL_THREADS  Number of parallel processes (default: 12)
+# -*- coding: utf-8 -*-
+"""
+myConstant.py — BASIL web-app compatible config.
+
+This keeps the original BASIL variable names expected by the upstream code,
+but replaces hard-coded sample-specific values with environment variables set
+by basil_dispatcher.sh / run_pipeline.py.
+"""
 
 import os
 import sys
 
 
 def _require(name: str) -> str:
+    """Return a required environment variable or exit with a clear error."""
     val = os.environ.get(name)
     if val is None or val == "":
         sys.stderr.write(
-            f"[myConstant.py] ERROR: required environment variable {name} "
-            "is not set. This file is driven by the BASIL web-app dispatcher; "
-            "do not run main.py directly.\n"
+            f"[myConstant.py] ERROR: required environment variable {name} is not set.\n"
+            "This file is driven by the BASIL web-app dispatcher; do not run "
+            "main.py directly unless these variables are exported.\n"
         )
         sys.exit(2)
     return val
 
 
-# --- per-sample inputs (env-driven) -----------------------------------------
-DATA = _require("BASIL_DATA")
-CASE = _require("BASIL_CASE")
-OUT = _require("BASIL_OUT")
-DILUTION = float(_require("BASIL_D"))
-POPULATION_SIZE = float(_require("BASIL_N"))
+# ----- File I/O -------------------------------------------------------------
+# Original BASIL variable names. These names are used by BASIL internals.
+data = _require("BASIL_DATA")                 # barcode read count data
+case_name = _require("BASIL_CASE")            # naming this BASIL run
+OutputFileDir = _require("BASIL_OUT")         # directory of output files
 
-# Ensure output directory exists
-os.makedirs(OUT, exist_ok=True)
+# Make sure the per-sample output directory exists before BASIL writes to it.
+os.makedirs(OutputFileDir, exist_ok=True)
 
-# --- fixed computational parameters -----------------------------------------
-# Multiprocessing workers. Suggested 12–40. Override with BASIL_THREADS.
+
+# ------ EXPERIMENTAL PARAMETERS in Barcode lineage tracking -----------------
+# Original BASIL variable names.
+D = float(_require("BASIL_D"))                 # dilution factor
+N = float(_require("BASIL_N"))                 # carrying capacity / population size
+
+
+# ------ COMPUTATIONAL PARAMETERS for BASIL performance ----------------------
+# Original BASIL variable names.
 NUMBER_OF_PROCESSES = int(os.environ.get("BASIL_THREADS", "12"))
-
-# Number of randomly selected reference lineages used to infer mean fitness.
 NUMBER_LINEAGE_MLE = 3000
 
-# --- back-compat aliases ----------------------------------------------------
-# Some BASIL versions reference different attribute names. Keep these in sync
-# with whatever upstream main.py imports.
-input_file = DATA
-case_name = CASE
-output_dir = OUT
-D = DILUTION
-N = POPULATION_SIZE
-n_processes = NUMBER_OF_PROCESSES
-n_lineage_mle = NUMBER_LINEAGE_MLE
 
-# ------ Use only for reading another posterior file as initialization of lineage (default=None)----#
+# ------ Use only for reading another posterior file as initialization --------
+# Original BASIL variable name.
 INITIAL_LINEAGES_FROM_FILE = None
 
-# ------ Model Setting in BASIL algorithm (do not change) -----------------#
-MODEL_NAME = {'N': 'NModel', 'SN': 'SModel_N', 'SS': 'SModel_S'}
-LINEAGE_TAG = {'UNK': 'Unknown', 'NEU': 'Neutral', 'ADP': 'Adaptive'}
+
+# ------ Model Setting in BASIL algorithm (do not change) --------------------
+# Original BASIL variable names.
+MODEL_NAME = {
+    "N": "NModel",
+    "SN": "SModel_N",
+    "SS": "SModel_S",
+}
+
+LINEAGE_TAG = {
+    "UNK": "Unknown",
+    "NEU": "Neutral",
+    "ADP": "Adaptive",
+}
+
+
+# ------ Compatibility aliases for wrappers / easier inspection --------------
+# These are extra names only. BASIL itself mainly expects the original names
+# above: data, case_name, OutputFileDir, D, N, NUMBER_OF_PROCESSES,
+# NUMBER_LINEAGE_MLE, INITIAL_LINEAGES_FROM_FILE, MODEL_NAME, LINEAGE_TAG.
+DATA = data
+CASE = case_name
+OUT = OutputFileDir
+DILUTION = D
+POPULATION_SIZE = N
+
+input_file = data
+output_dir = OutputFileDir
+n_processes = NUMBER_OF_PROCESSES
+n_lineage_mle = NUMBER_LINEAGE_MLE
 
