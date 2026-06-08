@@ -319,8 +319,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         manifest = load_manifest(job_dir)
-        basil_public = Path(args.basil_public or manifest.get("basil_public_dir")
-                            or "/opt/BASIL-public").resolve()
+        # basil_public = Path(args.basil_public or manifest.get("basil_public_dir")
+        #                     or "/opt/BASIL-public").resolve()
+        basil_public = '/home/ark/MAB/bin/BASIL-public'
         if not basil_public.exists():
             raise RuntimeError(f"basil_public directory does not exist: {basil_public}")
 
