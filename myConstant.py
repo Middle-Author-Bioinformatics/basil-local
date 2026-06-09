@@ -10,6 +10,9 @@ by basil_dispatcher.sh / run_pipeline.py.
 import os
 import sys
 
+def _with_trailing_slash(path: str) -> str:
+    """BASIL internally concatenates OutputFileDir + filename, so keep /."""
+    return path if path.endswith("/") else path + "/"
 
 def _require(name: str) -> str:
     """Return a required environment variable or exit with a clear error."""
@@ -28,7 +31,8 @@ def _require(name: str) -> str:
 # Original BASIL variable names. These names are used by BASIL internals.
 data = _require("BASIL_DATA")                 # barcode read count data
 case_name = _require("BASIL_CASE")            # naming this BASIL run
-OutputFileDir = _require("BASIL_OUT")         # directory of output files
+# OutputFileDir = _require("BASIL_OUT")         # directory of output files
+OutputFileDir = _with_trailing_slash(_require("BASIL_OUT"))
 
 # Make sure the per-sample output directory exists before BASIL writes to it.
 os.makedirs(OutputFileDir, exist_ok=True)
