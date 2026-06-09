@@ -172,13 +172,15 @@ parse_basil_filename <- function(path) {
     stop("Filename does not match expected BASIL pattern: ", bn)
   }
 
-  sample <- mm[2]
-  beta   <- mm[3]
+  sample_raw <- mm[2]
+  sample <- sub("_basil$", "", sample_raw)
+  beta <- mm[3]
 
   data.frame(
     file = path,
     file_name = bn,
     Sample = sample,
+    BasilSample = sample_raw,
     CF = as.numeric(beta),
     stringsAsFactors = FALSE
   )
@@ -417,6 +419,15 @@ for (s in samples) {
 
 all_merged_df <- bind_rows(all_merged)
 all_long_df <- bind_rows(all_long)
+
+fwrite(as.data.table(all_merged_df),
+       file.path(output_dir, paste0(prefix, ".all_merged.csv")))
+
+fwrite(as.data.table(all_long_df),
+       file.path(output_dir, paste0(prefix, ".all_long.csv")))
+
+fwrite(as.data.table(basil_index),
+       file.path(output_dir, paste0(prefix, ".basil_file_index.csv")))
 
 
 message("Done.")

@@ -126,7 +126,7 @@ for slug in "${slugs[@]}"; do
 {"slug":"$slug","state":"running","current_step":"preprocess",
  "started_at":"$(ts)",
  "steps":{"preprocess":{"state":"running","started_at":"$(ts)"},
-          "basil_inference":{"state":"pending"},
+          "basil_inference":{"state":"pending","samples":{}},
           "visualization":{"state":"pending"}}}
 JSON
     "$AWS" s3 cp "$workdir/status.json" \
@@ -151,17 +151,27 @@ JSON
             --content-type application/json --quiet || true
     fi
     if [[ -d "$workdir/basil_plots" ]]; then
-        "$AWS" s3 sync "$workdir/basil_plots/" \
-            "s3://$BASIL_RESULTS_BUCKET/$slug/basil_plots/" --quiet
+    "$AWS" s3 sync "$workdir/basil_plots/" \
+        "s3://$BASIL_RESULTS_BUCKET/$slug/basil_plots/" --quiet
     fi
+
+    if [[ -d "$workdir/basil_input/output" ]]; then
+        "$AWS" s3 sync "$workdir/basil_input/output/" \
+            "s3://$BASIL_RESULTS_BUCKET/$slug/basil_output/" --quiet
+    fi
+
     if [[ -d "$workdir/logs" ]]; then
         "$AWS" s3 sync "$workdir/logs/" \
             "s3://$BASIL_RESULTS_BUCKET/$slug/logs/" \
             --content-type text/plain --quiet
     fi
 
-    # 6. Mark this slug done so we don't reprocess it.
-    touch "$DONE_DIR/$slug"
+    # 6. Mark this slug done only if the pipeline succeeded.
+    if [[ "$pipeline_ok" -eq 1 ]]; then
+        touch "$DONE_DIR/$slug"
+    else
+        echo "[scraper] $slug — not marking done because pipeline failed"
+    fi
 
     # Optional cleanup once you've confirmed the results landed in S3:
     # "$AWS" s3 rm "s3://$BASIL_INPUT_BUCKET/$slug/" --recursive
