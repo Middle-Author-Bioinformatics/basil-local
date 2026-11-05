@@ -25,7 +25,8 @@ OPTIONAL ARGUMENTS:
       Default: 1
 
       Behavior:
-      - bartender input: keeps time_point_X columns where X >= first_timepoint_to_keep
+      - bartender time_point_X input: keeps columns where X >= first_timepoint_to_keep
+      - BASIL-style CSV input: keeps columns by position after numeric cycle sorting
       - barcodeCounter input: keeps count columns by position, starting at first_timepoint_to_keep
 
   -y, --input_type
@@ -44,11 +45,17 @@ INPUT TYPES:
       Expected structure:
         - first columns include barcode/seq/optional metadata
         - count columns named like: time_point_1, time_point_2, ...
+        - also accepts BASIL-style CSV: Barcode Index,T=1 cycle,T=2 cycle,...
 
       Output BASIL columns are renamed as:
         time_point_1 -> T=0 cycle
         time_point_2 -> T=1 cycle
         etc.
+
+      Existing T=N cycle headers retain their cycle numbers. Both header
+      formats are sorted numerically before output. They cannot be mixed
+      in the same file. For BASIL-style CSV, -t 1 keeps all cycles, including
+      T=0 if present; -t 3 drops the first two chronologically sorted columns.
 
   barcodeCounter
       Expects .tab or .tsv files.
@@ -100,17 +107,7 @@ NOTES:
   quit(save = "no", status = 0)
 }
 
-suppressPackageStartupMessages({
-  library(reshape2)
-  library(ggplot2)
-  library(ggrepel)
-  library(dplyr)
-  library(data.table)
-  library(stringi)
-  library(ggridges)
-  library(tidyr)
-  library(viridis)
-})
+# Preprocessing uses base R only; plotting dependencies belong to basilHelper.v2.R.
 
 input_dir <- NULL
 output_dir <- NULL
@@ -140,8 +137,9 @@ while (i <= length(args)) {
   } else if (arg %in% c("-t", "--first_timepoint_to_keep")) {
     if (i == length(args)) stop("Missing value for ", arg)
     first_timepoint_to_keep <- as.integer(args[i + 1])
-    if (is.na(first_timepoint_to_keep)) {
-      stop("first_timepoint_to_keep must be an integer")
+    if (is.na(first_timepoint_to_keep) || first_timepoint_to_keep < 1 ||
+        as.numeric(args[i + 1]) != first_timepoint_to_keep) {
+      stop("first_timepoint_to_keep must be a positive integer")
     }
     i <- i + 2
 
@@ -190,20 +188,26 @@ if (length(files) == 0) {
   stop("No input files found in ", folder, " for input_type = ", input_type)
 }
 
+imported_names <- character(0)
+conversion_names <- character(0)
+skipped_details <- character(0)
+
 for (f in files) {
   fname <- tools::file_path_sans_ext(basename(f))
   df_name <- fname
   
   if (input_type == "bartender") {
-    df <- read.csv(f, check.names = FALSE)
+    df <- read.csv(f, check.names = FALSE, colClasses = "character")
     if (ncol(df) < 2) {
       warning("Skipping ", fname, ": bartender file has fewer than 2 columns.")
       next
     }
-    colnames(df)[1:2] <- c("barcode", "seq")
+    # Only the ID column is positional. A count column may be column 2.
+    colnames(df)[1] <- "barcode"
 
   } else if (input_type == "barcodeCounter") {
-    df <- read.delim(f, header = TRUE, sep = "\t", check.names = FALSE)
+    df <- read.delim(f, header = TRUE, sep = "\t", check.names = FALSE,
+                     colClasses = "character")
     if (ncol(df) < 2) {
       warning("Skipping ", fname, ": barcodeCounter file has fewer than 2 columns.")
       next
@@ -211,6 +215,7 @@ for (f in files) {
     colnames(df)[1] <- "barcode"
   }
   
+  imported_names <- c(imported_names, df_name)
   assign(df_name, df, envir = .GlobalEnv)
   rm(df)
 }
@@ -220,8 +225,8 @@ for (f in files) {
 # Optionally remove early timepoints, but always write one BASIL file
 ##############################################################
 
-# reconstruct the list of imported base names from the file list
-imported_names <- unique(tools::file_path_sans_ext(basename(files)))
+# Track only tables that were actually imported.
+imported_names <- unique(imported_names)
 
 for (nm in imported_names) {
   if (!exists(nm, envir = .GlobalEnv)) {
@@ -235,16 +240,48 @@ for (nm in imported_names) {
     # first column for BASIL
     colnames(df)[1] <- "Barcode Index"
 
-    # identify timepoint columns before removing metadata columns
-    tp_cols <- grep("^time_point_[0-9]+$", colnames(df), value = TRUE)
+    # Detect explicit time labels; never infer cycles from arbitrary headers.
+    legacy_cols <- grep("^time_point_[0-9]+$", colnames(df), value = TRUE)
+    basil_cols <- grep("^T=[0-9]+ cycle$", colnames(df), value = TRUE)
+    if (length(legacy_cols) > 0 && length(basil_cols) > 0) {
+      stop("Mixed time_point_X and T=N cycle headers in ", nm,
+           "; use one format per file.", call. = FALSE)
+    }
+    native_basil <- length(basil_cols) > 0
+    tp_cols <- if (native_basil) basil_cols else legacy_cols
 
     if (length(tp_cols) == 0) {
-      warning("No time_point_X columns found in ", nm, "; skipping.")
+      detail <- paste0(
+        nm, ": no recognized timepoint columns found. Expected names such as ",
+        "time_point_1, time_point_2 or T=1 cycle, T=2 cycle. Actual headers: ",
+        paste(colnames(df), collapse = " | "),
+        ". Input: ", files[match(nm, tools::file_path_sans_ext(basename(files)))],
+        ". Check the delimiter and input_type; timepoint order will not be guessed."
+      )
+      skipped_details <- c(skipped_details, detail)
+      warning(detail, "; skipping.", call. = FALSE)
       next
     }
 
-    nums <- as.integer(sub("^time_point_", "", tp_cols))
-    keep_cols <- tp_cols[nums >= first_timepoint_to_keep]
+    nums <- if (native_basil) {
+      as.integer(sub("^T=([0-9]+) cycle$", "\\1", tp_cols))
+    } else {
+      as.integer(sub("^time_point_", "", tp_cols))
+    }
+    minimum <- if (native_basil) 0 else 1
+    if (anyNA(nums) || anyDuplicated(nums) || any(nums < minimum)) {
+      stop("Invalid or duplicate timepoint numbers in ", nm, call. = FALSE)
+    }
+    tp_cols <- tp_cols[order(nums)]
+    nums <- sort(nums)
+    # Native labels are actual cycle values, including a possible T=0.
+    # -t selects the first measurement to retain after numeric sorting.
+    keep <- if (native_basil) {
+      seq_along(nums) >= first_timepoint_to_keep
+    } else {
+      nums >= first_timepoint_to_keep
+    }
+    keep_cols <- tp_cols[keep]
 
     if (length(keep_cols) == 0) {
       warning("No timepoints retained in ", nm,
@@ -252,12 +289,9 @@ for (nm in imported_names) {
       next
     }
 
-    # keep barcode + retained timepoints only
     df <- df[, c("Barcode Index", keep_cols), drop = FALSE]
-
-    # rename retained timepoint columns to BASIL format
-    nums_keep <- as.integer(sub("^time_point_", "", keep_cols))
-    colnames(df)[-1] <- paste0("T=", nums_keep - 1, " cycle")
+    cycles <- if (native_basil) nums[keep] else nums[keep] - 1
+    colnames(df)[-1] <- paste0("T=", cycles, " cycle")
 
   } else if (input_type == "barcodeCounter") {
     # first column for BASIL
@@ -287,11 +321,31 @@ for (nm in imported_names) {
     colnames(df)[-1] <- paste0("T=", keep_idx - 1, " cycle")
   }
   
+  # Reject invalid counts instead of silently turning them into missing values.
+  df[-1] <- lapply(df[-1], function(x) {
+    counts <- suppressWarnings(as.numeric(x))
+    if (any(!is.finite(counts) | counts < 0 | counts != floor(counts))) {
+      stop("Invalid counts in ", nm,
+           ": retained count columns must contain nonnegative whole numbers.",
+           call. = FALSE)
+    }
+    counts
+  })
+  if (nrow(df) == 0) stop("No barcode rows found in ", nm, call. = FALSE)
+
   new_name <- paste0(nm, "_basil")
   assign(new_name, df, envir = .GlobalEnv)
   
   out_file <- file.path(output_dir, paste0(new_name, ".txt"))
   write.table(df, file = out_file, sep = "\t", row.names = FALSE, quote = FALSE)
+  conversion_names <- c(conversion_names, nm)
+}
+
+if (length(conversion_names) == 0) {
+  stop("No BASIL tables were created from ", input_dir, ". ",
+       paste(skipped_details, collapse = "\n"),
+       " Check the input headers, input_type, and first_timepoint_to_keep.",
+       call. = FALSE)
 }
 
 ##############################################################
@@ -301,7 +355,7 @@ for (nm in imported_names) {
 First_Data_Column <- 2
 # ---- Find candidate data.frames in global env ----
 
-df_names <- paste0(imported_names, "_basil")
+df_names <- paste0(conversion_names, "_basil")
 
 # ---- Loop over data.frames ----
 for (nm in df_names) {
@@ -344,7 +398,7 @@ for (nm in df_names) {
 message("Done. Created ", length(df_names), " BASIL frequency data.frame(s).")
 
 # export freq tables to CSV file
-freq_tables <- paste0(imported_names, "_basil_freq")
+freq_tables <- paste0(conversion_names, "_basil_freq")
 
 for (nm in freq_tables) {
   write.csv(
@@ -365,7 +419,7 @@ input_csv <- data.frame(
   stringsAsFactors = FALSE
 )
 
-for (nm in imported_names) {
+for (nm in conversion_names) {
   basil_name <- paste0(nm, "_basil")
   
   if (!exists(basil_name, envir = .GlobalEnv)) {
